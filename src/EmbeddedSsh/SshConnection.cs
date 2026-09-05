@@ -29,6 +29,7 @@ public sealed class SshConnection : IAsyncDisposable
     private byte[]? _clientKexInit;
     private byte[]? _serverKexInit;
     private KexInitMessage? _clientKexInitMessage;
+    private readonly System.Net.EndPoint? _remoteEndPoint;
 
     /// <summary>
     /// Gets the connection state.
@@ -55,11 +56,27 @@ public sealed class SshConnection : IAsyncDisposable
     /// </summary>
     public ChannelManager? Channels => _channelManager;
 
+    /// <param name="stream">The underlying transport stream.</param>
+    /// <param name="options">Server options.</param>
     public SshConnection(Stream stream, SshServerOptions options)
+        : this(stream, options, remoteEndPoint: null)
+    {
+    }
+
+    /// <param name="stream">The underlying transport stream.</param>
+    /// <param name="options">Server options.</param>
+    /// <param name="remoteEndPoint">
+    /// Client remote endpoint, used to key the cross-connection authentication
+    /// attempt lockout in <see cref="Auth.AuthLayer"/> (see AuthAttemptGuard).
+    /// Optional so existing callers/tests that construct SshConnection
+    /// directly over an arbitrary Stream keep working unchanged.
+    /// </param>
+    public SshConnection(Stream stream, SshServerOptions options, System.Net.EndPoint? remoteEndPoint)
     {
         _stream = stream ?? throw new ArgumentNullException(nameof(stream));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _transport = new TransportLayer(stream);
+        _remoteEndPoint = remoteEndPoint;
     }
 
     /// <summary>
@@ -350,7 +367,7 @@ public sealed class SshConnection : IAsyncDisposable
             await _transport.SendMessageAsync(banner, timeoutCts.Token).ConfigureAwait(false);
         }
 
-        var authLayer = new AuthLayer(_transport, _options.Authenticator!, _options.MaxAuthAttempts);
+        var authLayer = new AuthLayer(_transport, _options.Authenticator!, _options.MaxAuthAttempts, _remoteEndPoint);
         _authenticatedUser = await authLayer.AuthenticateAsync(timeoutCts.Token).ConfigureAwait(false);
     }
 

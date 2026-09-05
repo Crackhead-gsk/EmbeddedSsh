@@ -22,9 +22,30 @@ public sealed class ChannelManager
     public const uint DefaultMaxPacketSize = 32 * 1024;
 
     /// <summary>
+    /// Default maximum number of simultaneously open channels per connection.
+    /// Without a cap, a client could send unbounded SSH_MSG_CHANNEL_OPEN
+    /// requests (each allocating buffered Channel&lt;T&gt; pairs, see
+    /// SshChannel) to exhaust server memory - a per-connection resource
+    /// exhaustion DoS. 64 comfortably covers legitimate multiplexed use
+    /// (multiple shells/port-forwards) while bounding worst case.
+    /// </summary>
+    public const int DefaultMaxChannels = 64;
+
+    /// <summary>
+    /// Maximum number of simultaneously open channels for this connection.
+    /// </summary>
+    public int MaxChannels { get; init; } = DefaultMaxChannels;
+
+    /// <summary>
     /// Gets the number of active channels.
     /// </summary>
     public int ActiveChannelCount => _channels.Count;
+
+    /// <summary>
+    /// Returns true if another channel may be opened without exceeding
+    /// <see cref="MaxChannels"/>.
+    /// </summary>
+    public bool HasCapacityForNewChannel() => _channels.Count < MaxChannels;
 
     /// <summary>
     /// Allocates a new channel ID.

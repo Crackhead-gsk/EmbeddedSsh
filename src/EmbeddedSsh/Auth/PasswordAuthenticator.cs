@@ -22,17 +22,27 @@ public sealed class PasswordAuthenticator : IAuthenticator
     public PasswordAuthenticator(IDictionary<string, string> credentials)
     {
         ArgumentNullException.ThrowIfNull(credentials);
+        // Fixed dummy value compared against for unknown usernames, so the
+        // "user not found" path takes roughly the same time as the "wrong
+        // password" path below (both perform one FixedTimeEquals call over
+        // similarly-sized inputs) instead of returning immediately. Without
+        // this, an attacker could distinguish valid from invalid usernames
+        // by response timing alone.
+        const string dummyPasswordForUnknownUser = "\u0000dummy-password-for-timing-parity\u0000";
         _validatePassword = (username, password) =>
         {
-            if (credentials.TryGetValue(username, out var storedPassword))
-            {
-                // Use constant-time comparison to prevent timing attacks
-                return ValueTask.FromResult(
-                    System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
-                        System.Text.Encoding.UTF8.GetBytes(password),
-                        System.Text.Encoding.UTF8.GetBytes(storedPassword)));
-            }
-            return ValueTask.FromResult(false);
+            var userExists = credentials.TryGetValue(username, out var storedForUser);
+            var storedPassword = userExists ? storedForUser! : dummyPasswordForUnknownUser;
+
+            // Use constant-time comparison to prevent timing attacks. This
+            // always runs, even for unknown usernames (see above), and the
+            // result is discarded for unknown users so the outcome only
+            // ever depends on `userExists`, not the comparison itself.
+            var matches = System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+                System.Text.Encoding.UTF8.GetBytes(password),
+                System.Text.Encoding.UTF8.GetBytes(storedPassword));
+
+            return ValueTask.FromResult(userExists && matches);
         };
     }
 

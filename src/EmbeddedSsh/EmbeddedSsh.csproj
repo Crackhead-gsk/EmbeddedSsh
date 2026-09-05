@@ -12,6 +12,13 @@
     <NoWarn>CS1591;CS0675</NoWarn>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Allows the test project to unit-test internal-only helpers (e.g.
+         AuthAttemptGuard) directly instead of only through public,
+         hard-to-deterministically-test entry points like AuthLayer. -->
+    <InternalsVisibleTo Include="d0x2a.EmbeddedSsh.Tests" />
+  </ItemGroup>
+
   <!-- NuGet Package Metadata -->
   <PropertyGroup>
     <PackageId>d0x2a.EmbeddedSsh</PackageId>

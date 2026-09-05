@@ -111,7 +111,15 @@ public sealed class SshChannel : IAsyncDisposable
     {
         RemoteChannelId = remoteChannelId;
         _remoteWindow = remoteWindow;
-        MaxPacketSize = maxPacketSize;
+        // Clamp to a sane maximum: this value is client-controlled and later
+        // cast to `int` (see WriteAsync's Math.Min((int)MaxPacketSize, ...)).
+        // A value like 0xFFFFFFFF becomes a negative int after that cast,
+        // which turns Math.Min's result negative and makes the subsequent
+        // Slice(offset, chunkSize) throw ArgumentOutOfRangeException,
+        // crashing the write path for this connection on otherwise-valid
+        // input. int.MaxValue is already far larger than any packet size
+        // this implementation would ever actually send in one chunk.
+        MaxPacketSize = Math.Min(maxPacketSize, (uint)int.MaxValue);
     }
 
     /// <summary>

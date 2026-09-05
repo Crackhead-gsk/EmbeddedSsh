@@ -17,15 +17,41 @@ public sealed class AuthLayer
     private readonly TransportLayer _transport;
     private readonly IAuthenticator _authenticator;
     private readonly int _maxAttempts;
+    private readonly string? _remoteKey;
 
     private int _attemptCount;
     private AuthenticatedUser? _authenticatedUser;
 
+    /// <param name="transport">SSH transport layer.</param>
+    /// <param name="authenticator">Authenticator implementation.</param>
+    /// <param name="maxAttempts">Max authentication attempts per connection before disconnecting.</param>
     public AuthLayer(TransportLayer transport, IAuthenticator authenticator, int maxAttempts = 20)
+        : this(transport, authenticator, maxAttempts, remoteEndPoint: null)
+    {
+    }
+
+    /// <param name="transport">SSH transport layer.</param>
+    /// <param name="authenticator">Authenticator implementation.</param>
+    /// <param name="maxAttempts">Max authentication attempts per connection before disconnecting.</param>
+    /// <param name="remoteEndPoint">
+    /// Client remote endpoint. When provided, authentication failures are
+    /// also tracked cross-connection per remote address via
+    /// <see cref="AuthAttemptGuard"/>, closing the gap where
+    /// <paramref name="maxAttempts"/> alone only limits attempts within a
+    /// single connection and can be bypassed by reconnecting or opening
+    /// many parallel connections.
+    /// </param>
+    public AuthLayer(TransportLayer transport, IAuthenticator authenticator, int maxAttempts, System.Net.EndPoint? remoteEndPoint)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _authenticator = authenticator ?? throw new ArgumentNullException(nameof(authenticator));
         _maxAttempts = maxAttempts;
+        _remoteKey = remoteEndPoint switch
+        {
+            System.Net.IPEndPoint ip => ip.Address.ToString(),
+            not null => remoteEndPoint.ToString(),
+            null => null,
+        };
     }
 
     /// <summary>
@@ -45,6 +71,11 @@ public sealed class AuthLayer
     /// <returns>The authenticated user.</returns>
     public async ValueTask<AuthenticatedUser> AuthenticateAsync(CancellationToken cancellationToken = default)
     {
+        var lockoutRemaining = AuthAttemptGuard.GetLockoutRemaining(_remoteKey);
+        if (lockoutRemaining > TimeSpan.Zero)
+            throw new SshAuthenticationException("unknown", "unknown",
+                $"Too many authentication failures from this address; locked out for {lockoutRemaining.TotalSeconds:F0}s");
+
         while (!IsAuthenticated)
         {
             var message = await _transport.ReceiveMessageAsync(cancellationToken).ConfigureAwait(false);
@@ -78,6 +109,7 @@ public sealed class AuthLayer
                 throw new SshAuthenticationException("unknown", "unknown", "Too many authentication attempts");
         }
 
+        AuthAttemptGuard.Clear(_remoteKey);
         return _authenticatedUser!;
     }
 
@@ -120,10 +152,17 @@ public sealed class AuthLayer
                     }
                 }
 
+                // A real credential guess failed (wrong password, bad
+                // signature, unknown key/user, etc.) - count it against the
+                // cross-connection lockout. The PK_OK probe above is not a
+                // credential guess (no signature was even offered yet), so
+                // it correctly bypasses this via the early `return`.
+                AuthAttemptGuard.RecordFailure(_remoteKey);
                 await SendFailureAsync(partial: false, cancellationToken).ConfigureAwait(false);
                 break;
 
             default:
+                AuthAttemptGuard.RecordFailure(_remoteKey);
                 await SendFailureAsync(partial: false, cancellationToken).ConfigureAwait(false);
                 break;
         }

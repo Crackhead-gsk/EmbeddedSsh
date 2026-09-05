@@ -115,6 +115,19 @@ public sealed class ConnectionLayer
             return;
         }
 
+        // Cap concurrent channels per connection to prevent a client from
+        // exhausting server memory via unbounded CHANNEL_OPEN requests (each
+        // channel allocates buffered Channel<T> pairs in SshChannel).
+        if (!_channelManager.HasCapacityForNewChannel())
+        {
+            await SendChannelOpenFailureAsync(
+                open.SenderChannel,
+                ChannelOpenFailureReason.ResourceShortage,
+                "Too many open channels",
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         // Allocate channel
         var localChannelId = _channelManager.AllocateChannelId();
         var channel = new SshChannel(
