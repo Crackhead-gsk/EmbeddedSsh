@@ -233,12 +233,23 @@ public static class Ed25519
         var table = GetBasePointTable();
         var result = ExtendedPoint.Neutral();
 
-        // For each bit i, if scalar bit i is set, add [2^i]B
+        // Constant-time double-and-add: always compute the addition for
+        // every bit position, then select between the accumulator and the
+        // sum via an arithmetic (branchless) mask instead of an `if` keyed
+        // on a secret bit. The previous version skipped PointAdd entirely
+        // when a bit was 0, which is a data-dependent branch on secret key
+        // material (the Ed25519 host key scalar and the per-signature
+        // nonce) - a classic timing side-channel that reference
+        // implementations (ref10/libsodium) explicitly avoid. The twisted
+        // Edwards addition formulas used here (a=-1) are complete, so
+        // adding the neutral element or re-adding the same point on every
+        // iteration is always well-defined - there's no correctness cost,
+        // only a fixed extra PointAdd per bit.
         for (int i = 0; i < 256; i++)
         {
             int bit = (scalar[i >> 3] >> (i & 7)) & 1;
-            if (bit == 1)
-                result = PointAdd(result, table[i]);
+            var sum = PointAdd(result, table[i]);
+            PointCSelect(ref result, sum, bit);
         }
 
         return result;
@@ -252,11 +263,29 @@ public static class Ed25519
         {
             result = PointDouble(result);
             int bit = (scalar[i >> 3] >> (i & 7)) & 1;
-            if (bit == 1)
-                result = PointAdd(result, point);
+            var sum = PointAdd(result, point);
+            PointCSelect(ref result, sum, bit);
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Constant-time conditional select: sets <paramref name="result"/> to
+    /// <paramref name="candidate"/> if <paramref name="select"/> is 1, or
+    /// leaves it unchanged if 0 - using a branchless arithmetic mask (same
+    /// technique as X25519's FeCSwap) instead of a data-dependent branch.
+    /// </summary>
+    private static void PointCSelect(ref ExtendedPoint result, in ExtendedPoint candidate, int select)
+    {
+        long mask = -(long)select; // all-ones if select == 1, all-zeros if select == 0
+        for (int i = 0; i < 10; i++)
+        {
+            result.X[i] ^= mask & (result.X[i] ^ candidate.X[i]);
+            result.Y[i] ^= mask & (result.Y[i] ^ candidate.Y[i]);
+            result.Z[i] ^= mask & (result.Z[i] ^ candidate.Z[i]);
+            result.T[i] ^= mask & (result.T[i] ^ candidate.T[i]);
+        }
     }
 
     private static ExtendedPoint PointAdd(ExtendedPoint p, ExtendedPoint q)

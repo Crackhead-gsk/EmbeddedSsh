@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using d0x2a.EmbeddedSsh.Crypto;
 
 namespace d0x2a.EmbeddedSsh.Tests.Crypto;
@@ -250,6 +251,57 @@ public class CryptoTests
         // Modify signature
         signature[0] ^= 1;
         Assert.False(Ed25519.Verify(publicKey, message, signature));
+    }
+
+    [Fact]
+    public void Ed25519_TestVector3_LongerMessage()
+    {
+        // RFC 8032 Section 7.1 Test 3 (SHA(abc) test case), exercised here
+        // primarily to cover more/different key-scalar bit patterns than
+        // Test 1/2 in the constant-time ScalarMultBase rewrite.
+        var privateKey = Convert.FromHexString(
+            "c5aa8df43f9f837bedb7442f31dcb7b1" +
+            "66d38535076f094b85ce3a2e0b4458f7");
+        var expectedPublic = Convert.FromHexString(
+            "fc51cd8e6218a1a38da47ed00230f058" +
+            "0816ed13ba3303ac5deb911548908025");
+        var message = Convert.FromHexString(
+            "af82");
+        var expectedSignature = Convert.FromHexString(
+            "6291d657deec24024827e69c3abe01a3" +
+            "0ce548a284743a445e3680d7db5ac3ac" +
+            "18ff9b538d16f290ae67f760984dc659" +
+            "4a7c15e9716ed28dc027beceea1ec40a");
+
+        var publicKey = Ed25519.GetPublicKey(privateKey);
+        Assert.Equal(expectedPublic, publicKey);
+
+        var signature = Ed25519.Sign(privateKey, message);
+        Assert.Equal(expectedSignature, signature);
+
+        Assert.True(Ed25519.Verify(publicKey, message, signature));
+    }
+
+    [Fact]
+    public void Ed25519_ManyRandomRoundTrips_AllVerify()
+    {
+        // Stress test for the constant-time ScalarMultBase rewrite: many
+        // random keys/messages exercise a wide spread of scalar bit
+        // patterns (the old branchy code and the new branchless PointCSelect
+        // code must agree on every bit pattern, not just the fixed RFC
+        // vectors above).
+        for (var i = 0; i < 200; i++)
+        {
+            var (privateKey, publicKey) = Ed25519.GenerateKeyPair();
+            var message = RandomNumberGenerator.GetBytes(1 + (i % 64));
+
+            var signature = Ed25519.Sign(privateKey, message);
+            Assert.True(Ed25519.Verify(publicKey, message, signature));
+
+            // Corrupting the message must always invalidate the signature.
+            message[0] ^= 0xFF;
+            Assert.False(Ed25519.Verify(publicKey, message, signature));
+        }
     }
 
     #endregion
