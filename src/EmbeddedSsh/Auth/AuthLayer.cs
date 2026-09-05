@@ -55,6 +55,20 @@ public sealed class AuthLayer
                     await ProcessAuthRequestAsync(request, cancellationToken).ConfigureAwait(false);
                     break;
 
+                // RFC 4253 SS11.2/SS11.3: SSH_MSG_IGNORE and SSH_MSG_DEBUG may be sent
+                // at any time, including during authentication (e.g. some clients use
+                // SSH_MSG_IGNORE for traffic analysis countermeasures). They carry no
+                // protocol meaning here and must be silently discarded rather than
+                // treated as a protocol error.
+                case IgnoreMessage:
+                case DebugMessage:
+                    break;
+
+                // RFC 4253 SS11.4: SSH_MSG_UNIMPLEMENTED is a reply to something *we*
+                // sent that the peer didn't understand; it is never an error on its own.
+                case UnimplementedMessage:
+                    break;
+
                 default:
                     throw new SshProtocolException(DisconnectReason.ProtocolError,
                         $"Unexpected message during authentication: {message.MessageType}");
