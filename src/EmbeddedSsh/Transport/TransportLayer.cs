@@ -434,7 +434,9 @@ public sealed class TransportLayer : IAsyncDisposable
     }
 
     /// <summary>
-    /// Resets sequence numbers (for testing).
+    /// Resets sequence numbers. Used by tests, and by <see cref="d0x2a.EmbeddedSsh.SshConnection"/>
+    /// to implement the OpenSSH "strict KEX" Terrapin countermeasure (resets both counters to
+    /// zero immediately after NEWKEYS when both peers negotiated it).
     /// </summary>
     internal void ResetSequenceNumbers()
     {

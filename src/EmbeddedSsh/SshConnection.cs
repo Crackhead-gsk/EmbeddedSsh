@@ -147,6 +147,17 @@ public sealed class SshConnection : IAsyncDisposable
         _clientKexInitMessage = clientKexInit;
         _clientKexInit = clientKexInitPayload; // Use raw bytes, not reconstructed
 
+        // Terrapin attack countermeasure (CVE-2023-48795): "strict KEX" per the OpenSSH
+        // extension. We always advertise "kex-strict-s-v00@openssh.com" in our KEXINIT (this
+        // connection never re-keys, so this is always the *initial* KEXINIT, which is the
+        // only time the marker is meaningful/safe to send). If the client's initial KEXINIT
+        // also carries the matching "kex-strict-c-v00@openssh.com" marker, both sides have
+        // opted into strict mode and we reset the transport's packet sequence numbers to zero
+        // right after NEWKEYS below — this is what makes prefix-truncation/injection attacks
+        // during KEX detectable instead of silently accepted. The marker itself is never
+        // selected as a real KEX algorithm; it only ever appears in the offered list.
+        var strictKexNegotiated = clientKexInit.KexAlgorithms.Contains("kex-strict-c-v00@openssh.com");
+
         // Select algorithms
         var (kexAlg, hostKeyAlg, cipherC2S, cipherS2C) = NegotiateAlgorithms(clientKexInit);
 
@@ -223,6 +234,19 @@ public sealed class SshConnection : IAsyncDisposable
         {
             throw new SshProtocolException(DisconnectReason.ProtocolError,
                 $"Expected NEWKEYS, got {newKeysMsg.MessageType}");
+        }
+
+        // Terrapin countermeasure: once both sides have confirmed strict KEX via the
+        // "kex-strict-*-v00@openssh.com" markers in their *initial* KEXINITs, reset the
+        // transport's send/receive packet sequence numbers to zero immediately after NEWKEYS.
+        // Per the OpenSSH strict-kex extension, this must happen exactly once, right here —
+        // resetting turns any packet an attacker spliced into the (still partially
+        // unauthenticated) pre-NEWKEYS stream into a MAC/sequence mismatch the moment
+        // encrypted traffic starts, instead of it silently shifting the sequence counters the
+        // Terrapin attack relies on.
+        if (strictKexNegotiated)
+        {
+            _transport.ResetSequenceNumbers();
         }
 
         // Derive keys based on negotiated cipher
@@ -410,8 +434,8 @@ public sealed class SshConnection : IAsyncDisposable
     private static KexInitMessage CreateKexInit()
     {
         var kexAlgorithms = MLKem.IsSupported
-            ? new List<string> { "mlkem768x25519-sha256", "curve25519-sha256", "curve25519-sha256@libssh.org", "ext-info-s" }
-            : new List<string> { "curve25519-sha256", "curve25519-sha256@libssh.org", "ext-info-s" };
+            ? new List<string> { "mlkem768x25519-sha256", "curve25519-sha256", "curve25519-sha256@libssh.org", "ext-info-s", "kex-strict-s-v00@openssh.com" }
+            : new List<string> { "curve25519-sha256", "curve25519-sha256@libssh.org", "ext-info-s", "kex-strict-s-v00@openssh.com" };
 
         return new KexInitMessage
         {
