@@ -274,13 +274,24 @@ public sealed class ConnectionLayer
 
         if (request.WantReply)
         {
+            // IMPORTANT: SSH_MSG_CHANNEL_SUCCESS/FAILURE must carry the *client's* channel
+            // number (i.e. this side's RemoteChannelId for the channel), not the number we
+            // just used to look the channel up in our own _channelManager
+            // (request.RecipientChannel, which is *our* local channel id). Client and server
+            // allocate channel ids independently, so the two only coincide by chance (e.g.
+            // both happen to be 0 for the first channel of a session). Replying with the
+            // local id instead of channel.RemoteChannelId sends the client a
+            // CHANNEL_SUCCESS/FAILURE for a channel number it never opened, which most
+            // clients treat as a fatal protocol violation ("Received SSH2_MSG_CHANNEL_SUCCESS
+            // for nonexistent channel N") and disconnect on — even though the request (e.g.
+            // the "sftp" subsystem request that completes login) actually succeeded.
             if (success)
             {
-                await SendChannelSuccessAsync(request.RecipientChannel, cancellationToken).ConfigureAwait(false);
+                await SendChannelSuccessAsync(channel.RemoteChannelId, cancellationToken).ConfigureAwait(false);
             }
             else
             {
-                await SendChannelFailureAsync(request.RecipientChannel, cancellationToken).ConfigureAwait(false);
+                await SendChannelFailureAsync(channel.RemoteChannelId, cancellationToken).ConfigureAwait(false);
             }
         }
     }
